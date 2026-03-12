@@ -1,36 +1,28 @@
 import { Router } from "express";
-import { Database } from "sql.js";
+import { Pool, RowDataPacket, ResultSetHeader } from "mysql2/promise";
 import { body, param } from "express-validator";
 import { requireAuth, requireAdmin, AuthRequest } from "../middleware/auth";
 import { handleValidationErrors } from "../utils/validation";
 import bcrypt from "bcryptjs";
-import { saveDb } from "../db";
 import { sendApplicationRejection } from "../utils/mailer";
 
-export function createAdminRouter(db: Database) {
+export function createAdminRouter(pool: Pool) {
   const router = Router();
   router.use(requireAuth, requireAdmin);
 
   // ─── Dashboard Stats ───
-  router.get("/stats", (_req, res) => {
-    const schemeCount = (db.exec("SELECT COUNT(*) FROM schemes")[0]?.values[0]?.[0] ?? 0) as number;
-    const userCount = (db.exec("SELECT COUNT(*) FROM users")[0]?.values[0]?.[0] ?? 0) as number;
-    const appCount = (db.exec("SELECT COUNT(*) FROM applications")[0]?.values[0]?.[0] ?? 0) as number;
-    const pendingCount = (db.exec("SELECT COUNT(*) FROM applications WHERE status = 'pending'")[0]?.values[0]?.[0] ?? 0) as number;
-    res.json({ schemes: schemeCount, users: userCount, applications: appCount, pending: pendingCount });
+  router.get("/stats", async (_req, res) => {
+    const [[s]] = await pool.query<RowDataPacket[]>("SELECT COUNT(*) as c FROM schemes");
+    const [[u]] = await pool.query<RowDataPacket[]>("SELECT COUNT(*) as c FROM users");
+    const [[a]] = await pool.query<RowDataPacket[]>("SELECT COUNT(*) as c FROM applications");
+    const [[p]] = await pool.query<RowDataPacket[]>("SELECT COUNT(*) as c FROM applications WHERE status = 'pending'");
+    res.json({ schemes: s.c, users: u.c, applications: a.c, pending: p.c });
   });
 
   // ─── Schemes CRUD ───
-  router.get("/schemes", (_req, res) => {
-    const rows = db.exec("SELECT * FROM schemes ORDER BY id DESC");
-    if (!rows.length) { res.json([]); return; }
-    const cols = rows[0].columns;
-    const schemes = rows[0].values.map((vals) => {
-      const obj: Record<string, unknown> = {};
-      cols.forEach((c, i) => { obj[c] = vals[i]; });
-      return obj;
-    });
-    res.json(schemes);
+  router.get("/schemes", async (_req, res) => {
+    const [rows] = await pool.query<RowDataPacket[]>("SELECT * FROM schemes ORDER BY id DESC");
+    res.json(rows);
   });
 
   const validateScheme = [
@@ -50,9 +42,9 @@ export function createAdminRouter(db: Database) {
     body("tags").isString(),
   ];
 
-  router.post("/schemes", validateScheme, handleValidationErrors, (req: AuthRequest, res) => {
+  router.post("/schemes", validateScheme, handleValidationErrors, async (req: AuthRequest, res) => {
     const b = req.body;
-    db.run(
+    const [result] = await pool.execute<ResultSetHeader>(
       `INSERT INTO schemes (
         name, name_hi, ministry, ministry_hi, category,
         description, description_hi, eligibility_criteria, required_documents,
@@ -69,28 +61,25 @@ export function createAdminRouter(db: Database) {
         b.disability_required ? 1 : 0,
       ]
     );
-    saveDb();
-    const idRow = db.exec("SELECT last_insert_rowid() as id");
-    const id = idRow[0].values[0][0];
-    res.status(201).json({ id });
+    res.status(201).json({ id: result.insertId });
   });
 
-  router.put("/schemes/:id", validateScheme, handleValidationErrors, (req: AuthRequest, res) => {
+  router.put("/schemes/:id", validateScheme, handleValidationErrors, async (req: AuthRequest, res) => {
     const id = Number(req.params.id);
     const b = req.body;
-    const check = db.exec(`SELECT id FROM schemes WHERE id = ${id}`);
-    if (!check.length || !check[0].values.length) {
+    const [existing] = await pool.query<RowDataPacket[]>("SELECT id FROM schemes WHERE id = ?", [id]);
+    if (!existing.length) {
       res.status(404).json({ error: "Scheme not found" });
       return;
     }
-    db.run(
+    await pool.execute(
       `UPDATE schemes SET
         name=?, name_hi=?, ministry=?, ministry_hi=?, category=?,
         description=?, description_hi=?, eligibility_criteria=?, required_documents=?,
         application_process=?, benefit_amount=?, benefit_type=?, deadline=?,
         official_link=?, tags=?, is_new=?, min_age=?, max_age=?, max_income=?,
         gender_restriction=?, category_restriction=?, disability_required=?,
-        updated_at=datetime('now')
+        updated_at=NOW()
       WHERE id=?`,
       [
         b.name, b.name_hi, b.ministry, b.ministry_hi, b.category,
@@ -101,33 +90,24 @@ export function createAdminRouter(db: Database) {
         b.disability_required ? 1 : 0, id,
       ]
     );
-    saveDb();
     res.json({ success: true });
   });
 
-  router.delete("/schemes/:id", (req: AuthRequest, res) => {
+  router.delete("/schemes/:id", async (req: AuthRequest, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1) {
       res.status(400).json({ error: "Invalid ID" });
       return;
     }
-    db.run("DELETE FROM applications WHERE scheme_id = ?", [id]);
-    db.run("DELETE FROM schemes WHERE id = ?", [id]);
-    saveDb();
+    await pool.execute("DELETE FROM applications WHERE scheme_id = ?", [id]);
+    await pool.execute("DELETE FROM schemes WHERE id = ?", [id]);
     res.json({ success: true });
   });
 
   // ─── Users Management ───
-  router.get("/users", (_req, res) => {
-    const rows = db.exec("SELECT id, name, email, role, created_at FROM users ORDER BY id DESC");
-    if (!rows.length) { res.json([]); return; }
-    const cols = rows[0].columns;
-    const users = rows[0].values.map((vals) => {
-      const obj: Record<string, unknown> = {};
-      cols.forEach((c, i) => { obj[c] = vals[i]; });
-      return obj;
-    });
-    res.json(users);
+  router.get("/users", async (_req, res) => {
+    const [rows] = await pool.query<RowDataPacket[]>("SELECT id, name, email, role, created_at FROM users ORDER BY id DESC");
+    res.json(rows);
   });
 
   // Create a new admin user
@@ -142,27 +122,19 @@ export function createAdminRouter(db: Database) {
     async (req: AuthRequest, res) => {
       const { name, email, password } = req.body;
 
-      const checkStmt = db.prepare("SELECT id FROM users WHERE email = ?");
-      checkStmt.bind([email]);
-      if (checkStmt.step()) {
-        checkStmt.free();
+      const [existing] = await pool.query<RowDataPacket[]>("SELECT id FROM users WHERE email = ?", [email]);
+      if (existing.length) {
         res.status(409).json({ error: "An account with this email already exists" });
         return;
       }
-      checkStmt.free();
 
       try {
         const passwordHash = await bcrypt.hash(password, 12);
-        db.run(
+        const [result] = await pool.execute<ResultSetHeader>(
           "INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)",
           [name, email, passwordHash, "admin"]
         );
-        saveDb();
-
-        // Query back the created user to get the correct id
-        const row = db.exec("SELECT id FROM users WHERE email = ?", [email]);
-        const id = row[0]?.values[0]?.[0] ?? 0;
-        res.status(201).json({ id, name, email, role: "admin" });
+        res.status(201).json({ id: result.insertId, name, email, role: "admin" });
       } catch (err) {
         res.status(500).json({ error: "Failed to create admin user" });
       }
@@ -173,19 +145,18 @@ export function createAdminRouter(db: Database) {
     "/users/:id/role",
     [param("id").isInt({ min: 1 }), body("role").isIn(["user", "admin"])],
     handleValidationErrors,
-    (req: AuthRequest, res) => {
+    async (req: AuthRequest, res) => {
       const id = Number(req.params.id);
       if (id === req.userId) {
         res.status(400).json({ error: "Cannot change your own role" });
         return;
       }
-      db.run("UPDATE users SET role = ? WHERE id = ?", [req.body.role, id]);
-      saveDb();
+      await pool.execute("UPDATE users SET role = ? WHERE id = ?", [req.body.role, id]);
       res.json({ success: true });
     }
   );
 
-  router.delete("/users/:id", (req: AuthRequest, res) => {
+  router.delete("/users/:id", async (req: AuthRequest, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1) {
       res.status(400).json({ error: "Invalid ID" });
@@ -195,15 +166,14 @@ export function createAdminRouter(db: Database) {
       res.status(400).json({ error: "Cannot delete yourself" });
       return;
     }
-    db.run("DELETE FROM applications WHERE user_id = ?", [id]);
-    db.run("DELETE FROM users WHERE id = ?", [id]);
-    saveDb();
+    await pool.execute("DELETE FROM applications WHERE user_id = ?", [id]);
+    await pool.execute("DELETE FROM users WHERE id = ?", [id]);
     res.json({ success: true });
   });
 
   // ─── Applications Management ───
-  router.get("/applications", (_req, res) => {
-    const rows = db.exec(`
+  router.get("/applications", async (_req, res) => {
+    const [rows] = await pool.query<RowDataPacket[]>(`
       SELECT a.id, a.user_id, a.scheme_id, a.status, a.applied_at,
              u.name as user_name, u.email as user_email,
              s.name as scheme_name, s.category
@@ -212,28 +182,20 @@ export function createAdminRouter(db: Database) {
       JOIN schemes s ON a.scheme_id = s.id
       ORDER BY a.applied_at DESC
     `);
-    if (!rows.length) { res.json([]); return; }
-    const cols = rows[0].columns;
-    const apps = rows[0].values.map((vals) => {
-      const obj: Record<string, unknown> = {};
-      cols.forEach((c, i) => { obj[c] = vals[i]; });
-      return obj;
-    });
-    res.json(apps);
+    res.json(rows);
   });
 
   router.patch(
     "/applications/:id/status",
     [param("id").isInt({ min: 1 }), body("status").isIn(["pending", "under_review", "approved", "rejected"])],
     handleValidationErrors,
-    (req: AuthRequest, res) => {
+    async (req: AuthRequest, res) => {
       const id = Number(req.params.id);
       const newStatus = req.body.status;
-      db.run("UPDATE applications SET status = ? WHERE id = ?", [newStatus, id]);
-      saveDb();
+      await pool.execute("UPDATE applications SET status = ? WHERE id = ?", [newStatus, id]);
 
       if (newStatus === "rejected") {
-        const rows = db.exec(
+        const [rows] = await pool.query<RowDataPacket[]>(
           `SELECT a.id, u.name, u.email, s.name as scheme_name
            FROM applications a
            JOIN users u ON a.user_id = u.id
@@ -241,11 +203,11 @@ export function createAdminRouter(db: Database) {
            WHERE a.id = ?`,
           [id]
         );
-        if (rows.length && rows[0].values.length) {
-          const [appId, userName, userEmail, schemeName] = rows[0].values[0] as [number, string, string, string];
-          sendApplicationRejection(userEmail, userName, schemeName, appId)
-            .then(() => console.log(`[Mail] Rejection sent to ${userEmail}`))
-            .catch((err) => console.error(`[Mail] Failed rejection to ${userEmail}:`, err.message));
+        if (rows.length) {
+          const r = rows[0];
+          sendApplicationRejection(r.email, r.name, r.scheme_name, r.id)
+            .then(() => console.log(`[Mail] Rejection sent to ${r.email}`))
+            .catch((err) => console.error(`[Mail] Failed rejection to ${r.email}:`, err.message));
         }
       }
 
@@ -253,14 +215,13 @@ export function createAdminRouter(db: Database) {
     }
   );
 
-  router.delete("/applications/:id", (req: AuthRequest, res) => {
+  router.delete("/applications/:id", async (req: AuthRequest, res) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1) {
       res.status(400).json({ error: "Invalid ID" });
       return;
     }
-    db.run("DELETE FROM applications WHERE id = ?", [id]);
-    saveDb();
+    await pool.execute("DELETE FROM applications WHERE id = ?", [id]);
     res.json({ success: true });
   });
 

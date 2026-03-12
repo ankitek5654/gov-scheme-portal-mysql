@@ -1,10 +1,9 @@
 import { Router } from "express";
-import { Database } from "sql.js";
+import { Pool, RowDataPacket, ResultSetHeader } from "mysql2/promise";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { body } from "express-validator";
 import { handleValidationErrors } from "../utils/validation";
-import { saveDb } from "../db";
 import crypto from "crypto";
 import { sendPasswordResetEmail } from "../utils/mailer";
 
@@ -25,41 +24,25 @@ const validateLogin = [
   body("password").isString().isLength({ min: 1, max: 128 }),
 ];
 
-function rowToUser(columns: string[], values: unknown[]) {
-  const obj: Record<string, unknown> = {};
-  columns.forEach((col, i) => { obj[col] = values[i]; });
-  return obj as { id: number; name: string; email: string; password_hash: string; role: string; created_at: string };
-}
-
-export function createAuthRouter(db: Database) {
+export function createAuthRouter(pool: Pool) {
   const router = Router();
 
   router.post("/signup", validateSignup, handleValidationErrors, async (req, res) => {
     const { name, email, password } = req.body;
 
-    // Check if email already exists
-    const checkStmt = db.prepare("SELECT id FROM users WHERE email = ?");
-    checkStmt.bind([email]);
-    if (checkStmt.step()) {
-      checkStmt.free();
+    const [existing] = await pool.query<RowDataPacket[]>("SELECT id FROM users WHERE email = ?", [email]);
+    if (existing.length) {
       res.status(409).json({ error: "An account with this email already exists" });
       return;
     }
-    checkStmt.free();
 
     const passwordHash = await bcrypt.hash(password, 12);
 
-    db.run(
+    const [result] = await pool.execute<ResultSetHeader>(
       "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
       [name, email, passwordHash]
     );
-    saveDb();
-
-    // Get the inserted user's ID
-    const idStmt = db.prepare("SELECT last_insert_rowid() as id");
-    idStmt.step();
-    const userId = (idStmt.get() as unknown[])[0] as number;
-    idStmt.free();
+    const userId = result.insertId;
 
     const token = jwt.sign({ userId, email, role: "user" }, JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
 
@@ -72,15 +55,12 @@ export function createAuthRouter(db: Database) {
   router.post("/login", validateLogin, handleValidationErrors, async (req, res) => {
     const { email, password } = req.body;
 
-    const stmt = db.prepare("SELECT * FROM users WHERE email = ?");
-    stmt.bind([email]);
-    if (!stmt.step()) {
-      stmt.free();
+    const [rows] = await pool.query<RowDataPacket[]>("SELECT * FROM users WHERE email = ?", [email]);
+    if (!rows.length) {
       res.status(401).json({ error: "Invalid email or password" });
       return;
     }
-    const user = rowToUser(stmt.getColumnNames(), stmt.get());
-    stmt.free();
+    const user = rows[0];
 
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
@@ -96,7 +76,7 @@ export function createAuthRouter(db: Database) {
     });
   });
 
-  router.get("/me", (req, res) => {
+  router.get("/me", async (req, res) => {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith("Bearer ")) {
       res.status(401).json({ error: "Not authenticated" });
@@ -106,21 +86,16 @@ export function createAuthRouter(db: Database) {
     try {
       const payload = jwt.verify(authHeader.slice(7), JWT_SECRET) as { userId: number; email: string };
 
-      const stmt = db.prepare("SELECT id, name, email, role, created_at FROM users WHERE id = ?");
-      stmt.bind([payload.userId]);
-      if (!stmt.step()) {
-        stmt.free();
+      const [rows] = await pool.query<RowDataPacket[]>(
+        "SELECT id, name, email, role, created_at FROM users WHERE id = ?",
+        [payload.userId]
+      );
+      if (!rows.length) {
         res.status(401).json({ error: "User not found" });
         return;
       }
-      const cols = stmt.getColumnNames();
-      const vals = stmt.get();
-      stmt.free();
 
-      const user: Record<string, unknown> = {};
-      cols.forEach((c, i) => { user[c] = vals[i]; });
-
-      res.json({ user });
+      res.json({ user: rows[0] });
     } catch {
       res.status(401).json({ error: "Invalid or expired token" });
     }
@@ -131,17 +106,14 @@ export function createAuthRouter(db: Database) {
     "/forgot-password",
     [body("email").isEmail().normalizeEmail()],
     handleValidationErrors,
-    (req, res) => {
+    async (req, res) => {
       const { email } = req.body;
 
-      const stmt = db.prepare("SELECT id FROM users WHERE email = ?");
-      stmt.bind([email]);
-      if (!stmt.step()) {
-        stmt.free();
+      const [rows] = await pool.query<RowDataPacket[]>("SELECT id FROM users WHERE email = ?", [email]);
+      if (!rows.length) {
         res.status(404).json({ error: "No account found with this email" });
         return;
       }
-      stmt.free();
 
       // Generate a secure random token
       const token = crypto.randomBytes(32).toString("hex");
@@ -180,8 +152,7 @@ export function createAuthRouter(db: Database) {
       }
 
       const passwordHash = await bcrypt.hash(password, 12);
-      db.run("UPDATE users SET password_hash = ? WHERE email = ?", [passwordHash, entry.email]);
-      saveDb();
+      await pool.execute("UPDATE users SET password_hash = ? WHERE email = ?", [passwordHash, entry.email]);
 
       resetTokens.delete(token);
       res.json({ message: "Password reset successfully" });
@@ -216,15 +187,10 @@ export function createAuthRouter(db: Database) {
       const name = payload.name || email.split("@")[0];
 
       // Check if user exists
-      const stmt = db.prepare("SELECT id, name, email, role FROM users WHERE email = ?");
-      stmt.bind([email]);
-      if (stmt.step()) {
+      const [rows] = await pool.query<RowDataPacket[]>("SELECT id, name, email, role FROM users WHERE email = ?", [email]);
+      if (rows.length) {
         // Existing user — log them in
-        const cols = stmt.getColumnNames();
-        const vals = stmt.get();
-        stmt.free();
-        const user: Record<string, unknown> = {};
-        cols.forEach((c, i) => { user[c] = vals[i]; });
+        const user = rows[0];
         const token = jwt.sign(
           { userId: user.id, email: user.email, role: user.role },
           JWT_SECRET,
@@ -232,16 +198,13 @@ export function createAuthRouter(db: Database) {
         );
         res.json({ token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
       } else {
-        stmt.free();
         // New user — create account with random password hash
         const randomHash = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 12);
-        db.run(
+        const [result] = await pool.execute<ResultSetHeader>(
           "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
           [name, email, randomHash]
         );
-        saveDb();
-        const row = db.exec("SELECT id FROM users WHERE email = ?", [email]);
-        const userId = row[0]?.values[0]?.[0] as number;
+        const userId = result.insertId;
         const token = jwt.sign(
           { userId, email, role: "user" },
           JWT_SECRET,

@@ -1,72 +1,79 @@
-import initSqlJs from "sql.js";
+import mysql from "mysql2/promise";
+import dotenv from "dotenv";
 import path from "path";
-import fs from "fs";
 import { seedSchemes } from "./seedData";
 
+dotenv.config({ path: path.join(__dirname, "..", "..", ".env") });
+
 async function migrate() {
-  const dataDir = path.join(__dirname, "..", "..", "data");
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-  const DB_PATH = path.join(dataDir, "schemes.db");
+  const DB_NAME = process.env.DB_NAME || "gov_scheme_portal";
 
-  const SQL = await initSqlJs();
-  const db = new SQL.Database();
+  // Connect without database first to create it
+  const conn = await mysql.createConnection({
+    host: process.env.DB_HOST || "localhost",
+    port: Number(process.env.DB_PORT) || 3306,
+    user: process.env.DB_USER || "root",
+    password: process.env.DB_PASS || "",
+  });
 
-  db.run(`
+  await conn.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\``);
+  await conn.query(`USE \`${DB_NAME}\``);
+
+  await conn.query(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'user',
-      created_at TEXT DEFAULT (datetime('now'))
-    );
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      name VARCHAR(200) NOT NULL,
+      email VARCHAR(255) NOT NULL UNIQUE,
+      password_hash VARCHAR(255) NOT NULL,
+      role VARCHAR(20) NOT NULL DEFAULT 'user',
+      created_at DATETIME DEFAULT NOW()
+    )
   `);
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS applications (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      scheme_id INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      applied_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (scheme_id) REFERENCES schemes(id),
-      UNIQUE(user_id, scheme_id)
-    );
-  `);
-
-  db.run(`
+  await conn.query(`
     CREATE TABLE IF NOT EXISTS schemes (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      name_hi TEXT NOT NULL,
-      ministry TEXT NOT NULL,
-      ministry_hi TEXT NOT NULL,
-      category TEXT NOT NULL,
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      name VARCHAR(500) NOT NULL,
+      name_hi VARCHAR(500) NOT NULL,
+      ministry VARCHAR(500) NOT NULL,
+      ministry_hi VARCHAR(500) NOT NULL,
+      category VARCHAR(100) NOT NULL,
       description TEXT NOT NULL,
       description_hi TEXT NOT NULL,
       eligibility_criteria TEXT NOT NULL,
       required_documents TEXT NOT NULL,
       application_process TEXT NOT NULL,
-      benefit_amount TEXT NOT NULL,
-      benefit_type TEXT NOT NULL,
-      deadline TEXT,
-      official_link TEXT NOT NULL,
+      benefit_amount VARCHAR(200) NOT NULL,
+      benefit_type VARCHAR(200) NOT NULL,
+      deadline VARCHAR(100),
+      official_link VARCHAR(500) NOT NULL,
       tags TEXT NOT NULL,
-      is_new INTEGER DEFAULT 0,
-      min_age INTEGER,
-      max_age INTEGER,
-      max_income INTEGER,
-      gender_restriction TEXT,
-      category_restriction TEXT,
-      disability_required INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT (datetime('now')),
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
+      is_new TINYINT DEFAULT 0,
+      min_age INT,
+      max_age INT,
+      max_income INT,
+      gender_restriction VARCHAR(50),
+      category_restriction VARCHAR(100),
+      disability_required TINYINT DEFAULT 0,
+      created_at DATETIME DEFAULT NOW(),
+      updated_at DATETIME DEFAULT NOW() ON UPDATE NOW()
+    )
   `);
 
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS applications (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      user_id INT NOT NULL,
+      scheme_id INT NOT NULL,
+      status VARCHAR(30) NOT NULL DEFAULT 'pending',
+      applied_at DATETIME DEFAULT NOW(),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (scheme_id) REFERENCES schemes(id),
+      UNIQUE KEY unique_user_scheme (user_id, scheme_id)
+    )
+  `);
+
+  // Seed schemes
   const insertSql = `
     INSERT INTO schemes (
       name, name_hi, ministry, ministry_hi, category,
@@ -78,7 +85,7 @@ async function migrate() {
   `;
 
   for (const s of seedSchemes) {
-    db.run(insertSql, [
+    await conn.execute(insertSql, [
       s.name, s.name_hi, s.ministry, s.ministry_hi, s.category,
       s.description, s.description_hi, s.eligibility_criteria, s.required_documents,
       s.application_process, s.benefit_amount, s.benefit_type, s.deadline,
@@ -90,16 +97,13 @@ async function migrate() {
   // Seed default admin (password: admin123)
   const bcrypt = await import("bcryptjs");
   const adminHash = await bcrypt.hash("admin123", 12);
-  db.run(
+  await conn.execute(
     "INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)",
     ["Admin", "admin@gov.in", adminHash, "admin"]
   );
 
-  const data = db.export();
-  fs.writeFileSync(DB_PATH, Buffer.from(data));
-  db.close();
-
-  console.log(`Seeded ${seedSchemes.length} schemes into ${DB_PATH}`);
+  await conn.end();
+  console.log(`Seeded ${seedSchemes.length} schemes into MySQL database '${DB_NAME}'`);
 }
 
 migrate().catch(console.error);

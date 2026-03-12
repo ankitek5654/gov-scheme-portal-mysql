@@ -1,29 +1,26 @@
-import initSqlJs, { Database } from "sql.js";
-import path from "path";
-import fs from "fs";
+import mysql from "mysql2/promise";
 
-const DB_PATH = path.join(__dirname, "..", "data", "schemes.db");
+let pool: mysql.Pool;
 
-let db: Database;
-
-export async function getDb(): Promise<Database> {
-  if (db) return db;
-  const SQL = await initSqlJs();
-  if (fs.existsSync(DB_PATH)) {
-    const buffer = fs.readFileSync(DB_PATH);
-    db = new SQL.Database(buffer);
-  } else {
-    db = new SQL.Database();
-  }
-  return db;
+export function getPool(): mysql.Pool {
+  if (pool) return pool;
+  pool = mysql.createPool({
+    host: process.env.DB_HOST || "localhost",
+    port: Number(process.env.DB_PORT) || 3306,
+    user: process.env.DB_USER || "root",
+    password: process.env.DB_PASS || "",
+    database: process.env.DB_NAME || "gov_scheme_portal",
+    waitForConnections: true,
+    connectionLimit: 10,
+  });
+  return pool;
 }
 
-export function saveDb() {
-  if (!db) return;
-  const dataDir = path.dirname(DB_PATH);
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-  const data = db.export();
-  fs.writeFileSync(DB_PATH, Buffer.from(data));
+export async function initDb(): Promise<mysql.Pool> {
+  const p = getPool();
+  // Test connection
+  const conn = await p.getConnection();
+  console.log("[DB] MySQL connected");
+  conn.release();
+  return p;
 }

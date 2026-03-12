@@ -1,6 +1,6 @@
 # Government Scheme Awareness Portal — India 🇮🇳
 
-A full-stack web application to help Indian citizens discover, understand, and check eligibility for government welfare schemes.
+A full-stack web application to help Indian citizens discover, understand, and check eligibility for government welfare schemes. Built with React, Express, and **MySQL**.
 
 ## Features
 
@@ -22,7 +22,7 @@ A full-stack web application to help Indian citizens discover, understand, and c
 |-------|-----------|
 | Frontend | React 18, TypeScript, Tailwind CSS, React Router v6 |
 | Backend | Node.js, Express, TypeScript |
-| Database | SQLite via sql.js (pure JS, no native deps) |
+| Database | **MySQL 8.x** (mysql2/promise) |
 | Auth | JWT + bcryptjs, Google Identity Services |
 | Email | Nodemailer (Gmail SMTP) |
 | Build | Vite |
@@ -31,17 +31,30 @@ A full-stack web application to help Indian citizens discover, understand, and c
 
 ### Prerequisites
 
-- Node.js 18+
-- npm 9+
+- **Node.js 18+** and npm 9+
+- **MySQL 8.x** installed and running
 
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/ankitek5654/gov-scheme-portal.git
-cd gov-scheme-portal
+git clone https://github.com/ankitek5654/gov-scheme-portal-mysql.git
+cd gov-scheme-portal-mysql
 ```
 
-### 2. Setup Server
+### 2. Setup MySQL
+
+Make sure MySQL Server is installed and running. You can verify with:
+
+```bash
+mysql -u root -e "SELECT 'MySQL is running!' AS status;"
+```
+
+> **Note:** On Windows, if `mysql` is not on PATH, use the full path:
+> ```
+> "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" -u root -e "SELECT 1;"
+> ```
+
+### 3. Setup Server
 
 ```bash
 cd server
@@ -51,6 +64,14 @@ npm install
 Create a `server/.env` file:
 
 ```env
+# MySQL Configuration
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASS=
+DB_NAME=gov_scheme_portal
+
+# Gmail SMTP Configuration
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your-gmail@gmail.com
@@ -58,20 +79,25 @@ SMTP_PASS=your-gmail-app-password
 MAIL_FROM=Gov Scheme Portal <your-gmail@gmail.com>
 ```
 
-> **Note:** To get a Gmail App Password:
-> 1. Enable 2-Step Verification at https://myaccount.google.com/security
-> 2. Generate an App Password at https://myaccount.google.com/apppasswords
-> 3. Use the 16-character password (with spaces) as `SMTP_PASS`
+> **Gmail App Password:** Enable 2-Step Verification at https://myaccount.google.com/security, then generate an App Password at https://myaccount.google.com/apppasswords.
 
-Start the server:
+#### Seed the database
+
+This creates the `gov_scheme_portal` database, tables, 15 government schemes, and default admin user:
 
 ```bash
-node --import tsx src/index.ts
+npx tsx src/seed/migrate.ts
+```
+
+#### Start the server
+
+```bash
+npx tsx src/index.ts
 ```
 
 Server starts at **http://localhost:3001**
 
-### 3. Setup Client
+### 4. Setup Client
 
 Open a new terminal:
 
@@ -94,9 +120,37 @@ npm run dev
 
 Client starts at **http://localhost:5174**
 
-### 4. Open the app
+### 5. Open the app
 
 Visit **http://localhost:5174** in your browser.
+
+## Database
+
+### Connection Details
+
+| Setting | Value |
+|---------|-------|
+| Host | localhost |
+| Port | 3306 |
+| User | root |
+| Password | *(empty by default)* |
+| Database | gov_scheme_portal |
+
+### Tables
+
+| Table | Description |
+|-------|-------------|
+| `schemes` | 15 government schemes with bilingual data, eligibility rules |
+| `users` | Registered users with roles (user/admin) |
+| `applications` | User applications linked to schemes |
+
+### View Database
+
+You can browse the database using:
+
+- **MySQL Workbench** (GUI) — connect to `localhost:3306`
+- **Command line** — `mysql -u root -e "USE gov_scheme_portal; SELECT * FROM schemes;"`
+- **VS Code** — Install the "MySQL" extension by Weijan Chen
 
 ## Default Admin Account
 
@@ -133,7 +187,7 @@ Admin login page: `/admin/login`
 ## Project Structure
 
 ```
-gov-scheme-portal/
+gov-scheme-portal-mysql/
 ├── client/                  # React frontend
 │   ├── src/
 │   │   ├── components/      # Header, Footer, SchemeCard, SearchBar, etc.
@@ -146,12 +200,13 @@ gov-scheme-portal/
 │   └── package.json
 ├── server/                  # Express backend
 │   ├── src/
+│   │   ├── db.ts            # MySQL connection pool (mysql2/promise)
 │   │   ├── routes/          # auth, schemes, eligibility, applications, admin
 │   │   ├── models/          # DB queries + eligibility logic
 │   │   ├── middleware/      # JWT auth + role middleware
 │   │   ├── seed/            # Migration + seed data (15 schemes)
 │   │   └── utils/           # mailer, validation
-│   ├── .env                 # SMTP credentials (not committed)
+│   ├── .env                 # DB + SMTP credentials (not committed)
 │   └── package.json
 ├── .gitignore
 └── README.md

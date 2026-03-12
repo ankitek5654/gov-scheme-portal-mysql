@@ -1,4 +1,4 @@
-import { Database } from "sql.js";
+import { Pool, RowDataPacket } from "mysql2/promise";
 
 export interface Scheme {
   id: number;
@@ -28,24 +28,7 @@ export interface Scheme {
   updated_at: string;
 }
 
-function rowToScheme(columns: string[], values: unknown[]): Scheme {
-  const obj: Record<string, unknown> = {};
-  columns.forEach((col, i) => { obj[col] = values[i]; });
-  return obj as unknown as Scheme;
-}
-
-function queryAll(db: Database, sql: string, params: unknown[] = []): Scheme[] {
-  const stmt = db.prepare(sql);
-  if (params.length) stmt.bind(params);
-  const results: Scheme[] = [];
-  while (stmt.step()) {
-    results.push(rowToScheme(stmt.getColumnNames(), stmt.get()));
-  }
-  stmt.free();
-  return results;
-}
-
-export function getAllSchemes(db: Database, search?: string, category?: string): Scheme[] {
+export async function getAllSchemes(pool: Pool, search?: string, category?: string): Promise<Scheme[]> {
   let sql = "SELECT * FROM schemes WHERE 1=1";
   const params: unknown[] = [];
 
@@ -55,27 +38,29 @@ export function getAllSchemes(db: Database, search?: string, category?: string):
   }
 
   if (search) {
-    sql +=
-      " AND (name LIKE ? OR description LIKE ? OR tags LIKE ? OR ministry LIKE ?)";
+    sql += " AND (name LIKE ? OR description LIKE ? OR tags LIKE ? OR ministry LIKE ?)";
     const term = `%${search}%`;
     params.push(term, term, term, term);
   }
 
   sql += " ORDER BY is_new DESC, updated_at DESC";
-  return queryAll(db, sql, params);
+  const [rows] = await pool.query<RowDataPacket[]>(sql, params);
+  return rows as Scheme[];
 }
 
-export function getSchemeById(db: Database, id: number): Scheme | undefined {
-  const results = queryAll(db, "SELECT * FROM schemes WHERE id = ?", [id]);
-  return results[0];
+export async function getSchemeById(pool: Pool, id: number): Promise<Scheme | undefined> {
+  const [rows] = await pool.query<RowDataPacket[]>("SELECT * FROM schemes WHERE id = ?", [id]);
+  return (rows as Scheme[])[0];
 }
 
-export function getNewSchemes(db: Database): Scheme[] {
-  return queryAll(db, "SELECT * FROM schemes WHERE is_new = 1 ORDER BY updated_at DESC LIMIT 10");
+export async function getNewSchemes(pool: Pool): Promise<Scheme[]> {
+  const [rows] = await pool.query<RowDataPacket[]>("SELECT * FROM schemes WHERE is_new = 1 ORDER BY updated_at DESC LIMIT 10");
+  return rows as Scheme[];
 }
 
-export function getRelatedSchemes(db: Database, id: number, category: string): Scheme[] {
-  return queryAll(db, "SELECT * FROM schemes WHERE category = ? AND id != ? LIMIT 4", [category, id]);
+export async function getRelatedSchemes(pool: Pool, id: number, category: string): Promise<Scheme[]> {
+  const [rows] = await pool.query<RowDataPacket[]>("SELECT * FROM schemes WHERE category = ? AND id != ? LIMIT 4", [category, id]);
+  return rows as Scheme[];
 }
 
 export interface EligibilityProfile {
@@ -94,11 +79,12 @@ export interface EligibilityResult {
   reasons: string[];
 }
 
-export function checkEligibility(
-  db: Database,
+export async function checkEligibility(
+  pool: Pool,
   profile: EligibilityProfile
-): EligibilityResult[] {
-  const allSchemes = queryAll(db, "SELECT * FROM schemes");
+): Promise<EligibilityResult[]> {
+  const [rows] = await pool.query<RowDataPacket[]>("SELECT * FROM schemes");
+  const allSchemes = rows as Scheme[];
   const results: EligibilityResult[] = [];
 
   for (const scheme of allSchemes) {
@@ -164,12 +150,13 @@ export function checkEligibility(
   return results;
 }
 
-export function checkSchemeEligibility(
-  db: Database,
+export async function checkSchemeEligibility(
+  pool: Pool,
   schemeId: number,
   profile: EligibilityProfile
-): { eligible: boolean; confidence?: "high" | "medium" | "low"; reasons: string[] } {
-  const schemes = queryAll(db, "SELECT * FROM schemes WHERE id = ?", [schemeId]);
+): Promise<{ eligible: boolean; confidence?: "high" | "medium" | "low"; reasons: string[] }> {
+  const [rows] = await pool.query<RowDataPacket[]>("SELECT * FROM schemes WHERE id = ?", [schemeId]);
+  const schemes = rows as Scheme[];
   if (!schemes.length) return { eligible: false, reasons: ["Scheme not found"] };
   const scheme = schemes[0];
 

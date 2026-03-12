@@ -1,9 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import path from "path";
-import fs from "fs";
-import { getDb } from "./db";
+import { initDb } from "./db";
 import { createSchemesRouter } from "./routes/schemes";
 import { createEligibilityRouter } from "./routes/eligibility";
 import { createAuthRouter } from "./routes/auth";
@@ -13,23 +11,17 @@ import { createAdminRouter } from "./routes/admin";
 const PORT = process.env.PORT || 3001;
 
 async function main() {
-  // Ensure data directory exists
-  const dataDir = path.join(__dirname, "..", "data");
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-
-  const db = await getDb();
+  const pool = await initDb();
 
   const app = express();
   app.use(cors({ origin: ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"] }));
   app.use(express.json());
 
-  app.use("/api/auth", createAuthRouter(db));
-  app.use("/api/schemes", createSchemesRouter(db));
-  app.use("/api/eligibility", createEligibilityRouter(db));
-  app.use("/api/applications", createApplicationsRouter(db));
-  app.use("/api/admin", createAdminRouter(db));
+  app.use("/api/auth", createAuthRouter(pool));
+  app.use("/api/schemes", createSchemesRouter(pool));
+  app.use("/api/eligibility", createEligibilityRouter(pool));
+  app.use("/api/applications", createApplicationsRouter(pool));
+  app.use("/api/admin", createAdminRouter(pool));
 
   app.get("/api/categories", (_req, res) => {
     const categories = [

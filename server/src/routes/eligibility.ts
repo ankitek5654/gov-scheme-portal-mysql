@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { Database } from "sql.js";
+import { Pool } from "mysql2/promise";
 import { checkEligibility, checkSchemeEligibility } from "../models/scheme";
 import {
   validateEligibility,
@@ -7,11 +7,11 @@ import {
 } from "../utils/validation";
 import { param } from "express-validator";
 
-export function createEligibilityRouter(db: Database) {
+export function createEligibilityRouter(pool: Pool) {
   const router = Router();
 
-  router.post("/check", validateEligibility, handleValidationErrors, (req, res) => {
-    const results = checkEligibility(db, req.body);
+  router.post("/check", validateEligibility, handleValidationErrors, async (req, res) => {
+    const results = await checkEligibility(pool, req.body);
     res.json({
       results,
       disclaimer:
@@ -23,9 +23,9 @@ export function createEligibilityRouter(db: Database) {
     "/check/:schemeId",
     [param("schemeId").isInt({ min: 1 }), ...validateEligibility],
     handleValidationErrors,
-    (req, res) => {
+    async (req, res) => {
       const schemeId = Number(req.params.schemeId);
-      const result = checkSchemeEligibility(db, schemeId, req.body);
+      const result = await checkSchemeEligibility(pool, schemeId, req.body);
       res.json(result);
     }
   );
