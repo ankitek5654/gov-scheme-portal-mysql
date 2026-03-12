@@ -34,6 +34,24 @@ A full-stack web application to help Indian citizens discover, understand, and c
 - **Node.js 18+** and npm 9+
 - **MySQL 8.x** installed and running
 
+#### Install MySQL
+
+- **Windows:** Download from https://dev.mysql.com/downloads/installer/ → choose "MySQL Server" → use default settings (no root password needed)
+- **macOS:** `brew install mysql && brew services start mysql`
+- **Ubuntu/Debian:** `sudo apt install mysql-server && sudo systemctl start mysql`
+
+After installing, verify MySQL is running:
+
+```bash
+mysql -u root -e "SELECT 'MySQL is running!' AS status;"
+```
+
+> **Windows tip:** If `mysql` is not on PATH, use the full path:
+> ```
+> "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" -u root -e "SELECT 1;"
+> ```
+> If your MySQL has a root password, add `-p` and update `DB_PASS` in `.env`.
+
 ### 1. Clone the repo
 
 ```bash
@@ -41,27 +59,20 @@ git clone https://github.com/ankitek5654/gov-scheme-portal-mysql.git
 cd gov-scheme-portal-mysql
 ```
 
-### 2. Setup MySQL
-
-Make sure MySQL Server is installed and running. You can verify with:
-
-```bash
-mysql -u root -e "SELECT 'MySQL is running!' AS status;"
-```
-
-> **Note:** On Windows, if `mysql` is not on PATH, use the full path:
-> ```
-> "C:\Program Files\MySQL\MySQL Server 8.4\bin\mysql.exe" -u root -e "SELECT 1;"
-> ```
-
-### 3. Setup Server
+### 2. Setup Server
 
 ```bash
 cd server
 npm install
 ```
 
-Create a `server/.env` file:
+Create the env file from the example:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `server/.env` — update `DB_PASS` if your MySQL root has a password, and set Gmail SMTP credentials for email features:
 
 ```env
 # MySQL Configuration
@@ -71,7 +82,7 @@ DB_USER=root
 DB_PASS=
 DB_NAME=gov_scheme_portal
 
-# Gmail SMTP Configuration
+# Gmail SMTP Configuration (for email notifications)
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
 SMTP_USER=your-gmail@gmail.com
@@ -79,6 +90,8 @@ SMTP_PASS=your-gmail-app-password
 MAIL_FROM=Gov Scheme Portal <your-gmail@gmail.com>
 ```
 
+> **Note:** Email is optional. The app works fully without SMTP config — you just won't receive email notifications.
+>
 > **Gmail App Password:** Enable 2-Step Verification at https://myaccount.google.com/security, then generate an App Password at https://myaccount.google.com/apppasswords.
 
 #### Seed the database
@@ -97,7 +110,7 @@ npx tsx src/index.ts
 
 Server starts at **http://localhost:3001**
 
-### 4. Setup Client
+### 3. Setup Client
 
 Open a new terminal:
 
@@ -106,11 +119,13 @@ cd client
 npm install
 ```
 
-(Optional) To enable Google Sign-In, create `client/.env`:
+(Optional) To enable Google Sign-In, copy and edit the env example:
 
-```env
-VITE_GOOGLE_CLIENT_ID=your-google-client-id
+```bash
+cp .env.example .env
 ```
+
+Edit `client/.env` and set your Google Client ID. The app works without this — users can still sign up/login with email.
 
 Start the client:
 
@@ -120,7 +135,7 @@ npm run dev
 
 Client starts at **http://localhost:5174**
 
-### 5. Open the app
+### 4. Open the app
 
 Visit **http://localhost:5174** in your browser.
 
